@@ -19,6 +19,14 @@ export interface IndexedSymbolRef {
    * be left ambiguous by its own constructor.
    */
   readonly kind?: SymbolKind
+  /**
+   * The symbol's dotted qualified name, when known. Used to prefer a
+   * top-level declaration (qualifiedName === name) over a same-named nested
+   * type (qualifiedName has a "." prefix, e.g. Outer.Foo) when a bare ref
+   * name is otherwise ambiguous — `import a.b.Foo;` conventionally names the
+   * top-level type, not an unrelated same-named nested member elsewhere.
+   */
+  readonly qualifiedName?: string
 }
 
 const RESOLVE_EXTENSIONS_BY_LANGUAGE: Record<IndexLanguage, readonly string[]> = {
@@ -148,9 +156,15 @@ export function resolveJavaImportFiles(
   if (lastDot === -1) return [] // no package qualifier: default-package import, not resolvable
 
   if (isWildcard) {
-    return resolvePackageFiles(body, packagesByName, knownPaths)
+    // A wildcard import legitimately fans out to every file in the package,
+    // so cap it (mirrors Go's GO_MOD_CAP) to keep the edge count sane.
+    return resolvePackageFiles(body, packagesByName, knownPaths).slice(0, GO_MOD_CAP)
   }
 
+  // A single-class import always names exactly one file — filter by class
+  // name over the FULL (uncapped) directory listing first, so a package
+  // with >20 files doesn't silently drop a class outside the cap window
+  // before its name is even checked.
   const packageName = body.slice(0, lastDot)
   const className = body.slice(lastDot + 1)
   const files = resolvePackageFiles(packageName, packagesByName, knownPaths)
@@ -164,8 +178,7 @@ function resolvePackageFiles(
 ): readonly string[] {
   const dirs = packagesByName.get(packageName)
   if (!dirs || dirs.length === 0) return []
-  const matches = [...knownPaths].filter((path) => path.endsWith('.java') && dirs.includes(dirOf(path)))
-  return matches.slice(0, GO_MOD_CAP)
+  return [...knownPaths].filter((path) => path.endsWith('.java') && dirs.includes(dirOf(path)))
 }
 
 function fileBaseNameOf(path: string): string {
@@ -283,6 +296,14 @@ function pickAmongCandidates(
 ): IndexedSymbolRef | undefined {
   const imported = symbols.filter((s) => importedFiles.has(s.filePath))
   if (imported.length === 1) return imported[0]
+  if (imported.length > 1) {
+    // Two different imported files each define something named `name` — e.g.
+    // `import a.b.Foo;` and a second import whose file happens to contain an
+    // unrelated *nested* type also named Foo (Outer.Foo). A bare `Foo`
+    // reference means the top-level type, so prefer it over a nested one.
+    const topLevel = imported.filter((s) => s.qualifiedName === undefined || s.qualifiedName === s.name)
+    if (topLevel.length === 1) return topLevel[0]
+  }
 
   if (samePackageBonus !== undefined && packageNameByFile) {
     const samePackage = symbols.filter((s) => packageNameByFile.get(s.filePath) === samePackageBonus)

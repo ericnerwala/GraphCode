@@ -67,7 +67,19 @@ const programSpec: FakeNodeSpec = {
               text: 'private int count;',
               children: [
                 { type: 'modifiers', children: [] },
+                { type: 'type_identifier', text: 'int' },
                 { type: 'variable_declarator', fields: { name: { type: 'identifier', text: 'count' } } },
+              ],
+            },
+            {
+              type: 'field_declaration',
+              startLine: 5,
+              endLine: 5,
+              text: 'private Helper helper;',
+              children: [
+                { type: 'modifiers', children: [] },
+                { type: 'type_identifier', text: 'Helper' },
+                { type: 'variable_declarator', fields: { name: { type: 'identifier', text: 'helper' } } },
               ],
             },
             {
@@ -78,7 +90,19 @@ const programSpec: FakeNodeSpec = {
               children: [{ type: 'modifiers', children: [{ type: 'modifier', text: 'public' }] }],
               fields: {
                 name: { type: 'identifier', text: 'render' },
-                parameters: { type: 'formal_parameters', text: '()' },
+                parameters: {
+                  type: 'formal_parameters',
+                  text: '(Helper h)',
+                  children: [
+                    {
+                      type: 'formal_parameter',
+                      fields: {
+                        type: { type: 'type_identifier', text: 'Helper' },
+                        name: { type: 'identifier', text: 'h' },
+                      },
+                    },
+                  ],
+                },
                 body: {
                   type: 'block',
                   children: [
@@ -166,5 +190,14 @@ describe('extractJava (fake CST)', () => {
   it('extracts method_invocation and object_creation refs as calls', () => {
     expect(extraction.refs.find((r) => r.kind === 'calls' && r.fromSymbol === 'render' && r.name === 'assist')).toBeDefined()
     expect(extraction.refs.find((r) => r.kind === 'calls' && r.fromSymbol === 'render' && r.name === 'Helper')).toBeDefined()
+  })
+
+  it('emits a references ref for a field type, but not for a primitive field type', () => {
+    expect(extraction.refs.find((r) => r.kind === 'references' && r.fromSymbol === 'Widget' && r.name === 'Helper')).toBeDefined()
+    expect(extraction.refs.some((r) => r.fromSymbol === 'Widget' && r.name === 'int')).toBe(false)
+  })
+
+  it('emits a references ref for a method parameter type', () => {
+    expect(extraction.refs.find((r) => r.kind === 'references' && r.fromSymbol === 'render' && r.name === 'Helper')).toBeDefined()
   })
 })

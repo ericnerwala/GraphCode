@@ -22,12 +22,66 @@ environment variables. Nothing is required to get started — every field has a 
 | `maxCommits` | `number` | `2000` | Maximum commits walked into the git layer (commit nodes, `touched_by`, `co_change`). |
 | `ignore` | `string[]` | `[]` | Extra ignore globs, on top of whatever `.gitignore` already excludes. |
 | `workspaceRepos` | `string[]` | `[]` | Paths (absolute or relative to this repo's root) to other GraphCode-indexed repos, for federated search/impact. See [docs/workspaces.md](workspaces.md). |
+| `liveGraphSync` | `boolean` | `false` | Re-index each file the built-in agent writes/edits, in place, so subsequent graph queries and the reliability guards reflect the agent's own changes. See [Reliability guards](#reliability-guards). |
+| `editGuard` | `object` | see below | Pre-edit blast-radius advisory settings. |
+| `postEditVerify` | `boolean` | `false` | Post-edit graph verification (stale callers, dangling refs, unresolved imports). Requires `liveGraphSync`. |
+| `completionGateEnabled` | `boolean` | `false` | End-of-turn loose-ends sweep. |
+| `completionGateMaxIterations` | `number` | `2` | Max end-of-turn gate cycles per session (backstop against nagging loops). |
+| `completionGateMinSeverity` | `"high"` \| `"medium"` \| `"low"` | `"high"` | Lowest finding severity that can trigger the gate. |
 
 All fields are optional — an absent `graphcode.json` is equivalent to `{}`, and every field falls
 back to its default independently, so you only need to set what you want to change.
 
 Config is loaded fresh per invocation (`loadConfig` in `src/core/config.ts`); there's no daemon
 holding stale config in memory.
+
+## Reliability guards
+
+The reliability guards let the code graph audit the built-in agent's **output** — every edit — in
+addition to shaping its input via the turn-0 context pack. They are all **off by default**: with no
+configuration, the agent harness behaves exactly as it did before these existed. None of them can
+throw into the agent loop; each only appends advisory text to a tool result (or, for the completion
+gate, a single follow-up message).
+
+```json
+{
+  "liveGraphSync": true,
+  "editGuard": {
+    "enabled": true,
+    "minImpactedFiles": 2,
+    "topFiles": 5,
+    "topCoChanges": 3,
+    "maxSymbolsPerFile": 40
+  },
+  "postEditVerify": true,
+  "completionGateEnabled": true,
+  "completionGateMaxIterations": 2,
+  "completionGateMinSeverity": "high"
+}
+```
+
+- **`liveGraphSync`** is the foundation — `postEditVerify` and the most useful part of the
+  completion gate depend on the graph being current, so enabling either without `liveGraphSync` is a
+  no-op. Enabling `liveGraphSync` alone is safe and cheap: a single edited file is re-parsed and
+  re-resolved in one transaction; the scan of the cross-file pending-reference table is scoped to
+  just the edited file's symbol names, so it stays fast even in a 1M+ LOC monorepo.
+
+- **`editGuard`** is on by default *once an edit happens* (it costs nothing until then). Its
+  sub-fields: `enabled` toggles it; `minImpactedFiles` (default 2) suppresses the advisory for leaf
+  helpers whose blast radius is trivial; `topFiles`/`topCoChanges` bound how many impacted and
+  co-changing files are listed; `maxSymbolsPerFile` (default 40) is a hard cost cap — a file
+  defining more symbols than this skips impact computation entirely rather than run dozens of
+  reverse-BFS traversals inline.
+
+- **`postEditVerify`** reports graph-level breakage an edit introduced. Findings are severity-ranked
+  and capped, so a high-severity stale-caller finding is never buried behind low-severity noise.
+
+- **The completion gate** (`completionGateEnabled`) runs an end-of-turn sweep over every file the
+  agent wrote that turn. It only fires on findings at or above `completionGateMinSeverity`, a caller
+  the agent already touched this turn is presumed handled (suppressed), and it can hold the turn open
+  at most `completionGateMaxIterations` times. It is framed as *possible* loose ends that may already
+  be addressed, so a false positive costs the agent one cheap acknowledgement rather than a wrong
+  edit — which is why it defaults off and conservative.
 
 ## Environment variables
 

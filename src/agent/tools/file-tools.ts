@@ -2,6 +2,11 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'n
 import { dirname, join, relative } from 'node:path'
 import { PathEscapeError, resolveInRoot } from './path-safety.js'
 
+/** The prefix every file-tool failure result starts with. The single source of
+ * truth for the "did this tool fail" convention — finishEditDispatch sniffs it
+ * to suppress post-edit advisories on a failed write. */
+export const ERROR_PREFIX = 'error:'
+
 export interface ReadFileInput {
   readonly path: string
   readonly offset?: number

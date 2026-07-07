@@ -62,6 +62,32 @@ function walkExpressionForRefs(node, enclosing, ctx) {
             ctx.refs.push({ fromSymbol: enclosing, name: identifierRoot(typeNode), kind: 'calls' });
     }
 }
+const PRIMITIVE_TYPES = new Set(['int', 'long', 'short', 'byte', 'char', 'boolean', 'float', 'double', 'void', 'var']);
+/**
+ * Resolve a type-position node (`type_identifier`, `generic_type` like
+ * `List<Foo>`, `array_type` like `String[]`, `scoped_type_identifier` like
+ * `Outer.Inner`) down to the class/interface name it references, or
+ * undefined for a primitive/void/var (nothing to resolve against the graph).
+ */
+function typeRootName(node) {
+    if (node.type === 'type_identifier' || node.type === 'identifier') {
+        return PRIMITIVE_TYPES.has(node.text) ? undefined : node.text;
+    }
+    if (node.type === 'generic_type') {
+        const base = node.namedChild(0);
+        return base ? typeRootName(base) : undefined;
+    }
+    if (node.type === 'array_type') {
+        const element = node.childForFieldName('element') ?? node.namedChild(0);
+        return element ? typeRootName(element) : undefined;
+    }
+    if (node.type === 'scoped_type_identifier') {
+        // Outer.Inner: the last segment is the actual referenced type name.
+        const last = node.namedChild(node.namedChildCount - 1);
+        return last ? typeRootName(last) : undefined;
+    }
+    return undefined;
+}
 function typeListNames(clause) {
     // `clause` is a `super_interfaces` node whose single named child is a
     // `type_list` wrapping the actual type nodes; unwrap it before filtering.
@@ -137,9 +163,21 @@ function handleMethod(node, className, ctx) {
         exported: hasPublicModifier(node),
         parentName: className,
     });
+    if (params) {
+        for (const param of namedKids(params)) {
+            if (param.type !== 'formal_parameter' && param.type !== 'spread_parameter')
+                continue;
+            const typeNode = param.childForFieldName('type') ?? param.namedChild(0);
+            const typeName = typeNode ? typeRootName(typeNode) : undefined;
+            if (typeName)
+                ctx.refs.push({ fromSymbol: name, name: typeName, kind: 'references' });
+        }
+    }
     walkExpressionForRefs(node.childForFieldName('body'), name, ctx);
 }
 function handleField(node, className, ctx) {
+    const fieldTypeNode = node.childForFieldName('type') ?? namedKids(node).find((c) => c.type !== 'modifiers' && c.type !== 'variable_declarator');
+    const fieldTypeName = fieldTypeNode ? typeRootName(fieldTypeNode) : undefined;
     const declarators = namedKids(node).filter((c) => c.type === 'variable_declarator');
     for (const declarator of declarators) {
         const nameNode = declarator.childForFieldName('name');
@@ -156,6 +194,8 @@ function handleField(node, className, ctx) {
             exported: hasPublicModifier(node),
             parentName: className,
         });
+        if (fieldTypeName)
+            ctx.refs.push({ fromSymbol: className, name: fieldTypeName, kind: 'references' });
     }
 }
 function handleImport(node, ctx) {

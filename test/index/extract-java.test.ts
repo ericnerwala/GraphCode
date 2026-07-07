@@ -14,11 +14,15 @@ import static com.example.util.StaticHelper.assistStatically;
 
 public class Widget extends Base implements Shape {
     private int count;
+    private Helper helper;
 
     public void render() {
         count++;
         Helper.assist(count);
         new Helper();
+    }
+
+    public void configure(Helper h, String[] labels, int limit) {
     }
 }
 
@@ -94,6 +98,19 @@ describe.skipIf(!canLoadWasm)('extractJava', () => {
     const creation = extraction.refs.find((r) => r.kind === 'calls' && r.fromSymbol === 'render' && r.name === 'Helper')
     expect(call).toBeDefined()
     expect(creation).toBeDefined()
+  })
+
+  it('emits a references ref for a field type', () => {
+    const ref = extraction.refs.find((r) => r.kind === 'references' && r.fromSymbol === 'Widget' && r.name === 'Helper')
+    expect(ref).toBeDefined()
+  })
+
+  it('emits a references ref for a method parameter type, but not for primitives', () => {
+    const paramRef = extraction.refs.find((r) => r.kind === 'references' && r.fromSymbol === 'configure' && r.name === 'Helper')
+    const arrayRef = extraction.refs.find((r) => r.kind === 'references' && r.fromSymbol === 'configure' && r.name === 'String')
+    expect(paramRef).toBeDefined()
+    expect(arrayRef).toBeDefined()
+    expect(extraction.refs.some((r) => r.fromSymbol === 'configure' && r.name === 'int')).toBe(false)
   })
 })
 
