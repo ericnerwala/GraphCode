@@ -32,7 +32,7 @@ async function classifyChanges(files, previous, force) {
     }
     return { changed, unchangedPaths };
 }
-async function parseFiles(files, onProgress) {
+export async function parseFiles(files, onProgress) {
     await initParsers();
     const results = [];
     for (const file of files) {
@@ -60,7 +60,7 @@ async function parseFiles(files, onProgress) {
     return results;
 }
 /** Insert file + symbol nodes and contains edges for one parsed file. Returns bookkeeping for pass 2. */
-function insertFileGraph(store, repoId, parsed) {
+export function insertFileGraph(store, repoId, parsed) {
     const path = parsed.file.scanned.path;
     const fileNode = {
         kind: 'file',
@@ -114,11 +114,11 @@ function insertFileGraph(store, repoId, parsed) {
     };
 }
 /** Build the flat list of (name -> nodeId, filePath) for every symbol inserted this run. */
-function collectIndexedSymbols(inserted) {
+export function collectIndexedSymbols(inserted) {
     const refs = [];
     for (const file of inserted) {
         for (const symbol of file.symbols) {
-            refs.push({ nodeId: symbol.nodeId, name: symbol.bareName, filePath: file.path, kind: symbol.kind });
+            refs.push({ nodeId: symbol.nodeId, name: symbol.bareName, filePath: file.path, kind: symbol.kind, qualifiedName: symbol.qualifiedName });
         }
     }
     return refs;
@@ -136,7 +136,7 @@ function findEnclosingSymbolId(file, fromSymbolName) {
     return undefined;
 }
 /** Resolve imports (file->file edges) and refs (calls/extends/implements/references) for one file. */
-function resolveFileEdges(store, repoId, repoRoot, file, allPathsIncludingUnchanged, indexedSymbols, symbolsByName, javaPackagesByName, javaPackageNameByFile) {
+export function resolveFileEdges(store, repoId, repoRoot, file, allPathsIncludingUnchanged, indexedSymbols, symbolsByName, javaPackagesByName, javaPackageNameByFile) {
     const importedFiles = new Set();
     let edgeCount = 0;
     for (const raw of file.imports) {
@@ -286,11 +286,8 @@ function pickPendingTarget(rawTargets, srcFilePath) {
     const sameDir = targets.filter((t) => dirOf(t.filePath) === srcDir);
     return sameDir.length === 1 ? sameDir[0] : undefined;
 }
-/** Re-resolve pending refs whose target name now exists among newly inserted symbols. */
-function reresolvePendingRefs(store, repoId, indexedSymbols) {
-    let resolvedCount = 0;
-    // Index symbols by name once — a per-name filter over all symbols is O(n²)
-    // and unusable at monorepo scale (observed: 12.5k-file corpus never finished).
+/** Index the run's symbols by bare name once, so pending-ref resolution is O(pending) not O(pending·symbols). */
+function indexTargetsByName(indexedSymbols) {
     const targetsByName = new Map();
     for (const symbol of indexedSymbols) {
         const bucket = targetsByName.get(symbol.name);
@@ -299,26 +296,66 @@ function reresolvePendingRefs(store, repoId, indexedSymbols) {
         else
             targetsByName.set(symbol.name, [symbol]);
     }
+    return targetsByName;
+}
+/**
+ * Resolve every pending ref for one name against the run's newly-inserted
+ * symbols, inserting the edge and clearing the pending rows for that name.
+ * Shared by the full-run (reresolvePendingRefs) and scoped
+ * (reresolvePendingRefsForNames) paths so they never diverge in how they
+ * pick a target or when they clear the pending table.
+ */
+function resolvePendingRowsForName(store, repoId, name, targets) {
+    if (targets.length === 0)
+        return 0;
+    const pending = store.pendingRefsByName(repoId, name);
+    if (pending.length === 0)
+        return 0;
+    let resolvedCount = 0;
+    let anyResolved = false;
+    for (const ref of pending) {
+        const srcFilePath = store.getNode(ref.srcNode)?.filePath;
+        const target = pickPendingTarget(targets, srcFilePath);
+        if (!target || ref.srcNode === target.nodeId)
+            continue;
+        store.insertEdge(repoId, { src: ref.srcNode, dst: target.nodeId, kind: ref.kind });
+        resolvedCount += 1;
+        anyResolved = true;
+    }
+    if (anyResolved)
+        store.raw('DELETE FROM pending_refs WHERE repo_id = ? AND name = ?', [repoId, name]);
+    return resolvedCount;
+}
+/** Re-resolve pending refs whose target name now exists among newly inserted symbols. */
+export function reresolvePendingRefs(store, repoId, indexedSymbols) {
+    // Index symbols by name once — a per-name filter over all symbols is O(n²)
+    // and unusable at monorepo scale (observed: 12.5k-file corpus never finished).
+    const targetsByName = indexTargetsByName(indexedSymbols);
     const pendingNameRows = store.raw('SELECT DISTINCT name FROM pending_refs WHERE repo_id = ?', [repoId]);
+    let resolvedCount = 0;
     for (const { name } of pendingNameRows) {
-        const targets = targetsByName.get(name);
-        if (!targets || targets.length === 0)
-            continue;
-        const pending = store.pendingRefsByName(repoId, name);
-        if (pending.length === 0)
-            continue;
-        let anyResolved = false;
-        for (const ref of pending) {
-            const srcFilePath = store.getNode(ref.srcNode)?.filePath;
-            const target = pickPendingTarget(targets, srcFilePath);
-            if (!target || ref.srcNode === target.nodeId)
-                continue;
-            store.insertEdge(repoId, { src: ref.srcNode, dst: target.nodeId, kind: ref.kind });
-            resolvedCount += 1;
-            anyResolved = true;
-        }
-        if (anyResolved)
-            store.raw('DELETE FROM pending_refs WHERE repo_id = ? AND name = ?', [repoId, name]);
+        resolvedCount += resolvePendingRowsForName(store, repoId, name, targetsByName.get(name) ?? []);
+    }
+    return resolvedCount;
+}
+/**
+ * Same mechanism as reresolvePendingRefs, but scoped to a caller-supplied name
+ * set so single-file live sync never re-scans pending_refs for names unrelated
+ * to the file just edited. indexRepo keeps using the unscoped variant (a full
+ * run wants every pending name anyway); live sync passes only the edited file's
+ * added/removed symbol names, keeping the pending scan O(this-file) at
+ * monorepo scale.
+ */
+export function reresolvePendingRefsForNames(store, repoId, names, indexedSymbols) {
+    if (names.length === 0)
+        return 0;
+    const targetsByName = indexTargetsByName(indexedSymbols);
+    const uniqueNames = [...new Set(names)];
+    const placeholders = uniqueNames.map(() => '?').join(',');
+    const pendingNameRows = store.raw(`SELECT DISTINCT name FROM pending_refs WHERE repo_id = ? AND name IN (${placeholders})`, [repoId, ...uniqueNames]);
+    let resolvedCount = 0;
+    for (const { name } of pendingNameRows) {
+        resolvedCount += resolvePendingRowsForName(store, repoId, name, targetsByName.get(name) ?? []);
     }
     return resolvedCount;
 }

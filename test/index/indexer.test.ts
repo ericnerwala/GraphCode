@@ -390,6 +390,46 @@ public class ResourceManager {
     }
   })
 
+  it('resolves a field-type and parameter-type reference to a cross-package class used only as a type, never called', async () => {
+    // A class used purely as a field/parameter type (never `new`'d or called
+    // directly by name) previously produced no ref at all, so impact analysis
+    // couldn't see this caller -- a real Hadoop pattern (e.g. ByteArrayManager
+    // is only ever a field/parameter type in its actual callers).
+    write(
+      root,
+      'src/main/java/org/apache/hdfs/util/ByteArrayManager.java',
+      `package org.apache.hdfs.util;
+
+public class ByteArrayManager {
+}
+`,
+    )
+    write(
+      root,
+      'src/main/java/org/apache/hdfs/DataStreamer.java',
+      `package org.apache.hdfs;
+
+import org.apache.hdfs.util.ByteArrayManager;
+
+public class DataStreamer {
+  private final ByteArrayManager byteArrayManager;
+
+  private static void releaseBuffer(ByteArrayManager bam) {
+  }
+}
+`,
+    )
+    const config = loadConfig(root)
+    await indexRepo(store, config)
+
+    const bamNode = store.findNodesByName('ByteArrayManager', { kinds: ['symbol'] }).find((n) => n.subkind === 'class')
+    expect(bamNode).toBeDefined()
+    if (bamNode) {
+      const incoming = store.neighbors(bamNode.id, { direction: 'in', kinds: ['references'] })
+      expect(incoming.some((n) => n.node.filePath === 'src/main/java/org/apache/hdfs/DataStreamer.java')).toBe(true)
+    }
+  })
+
   it('resolves a wildcard import to every file in the target package', async () => {
     write(
       root,

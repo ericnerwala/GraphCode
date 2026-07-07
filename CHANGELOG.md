@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Conventional Commits](https://www.conventionalcommits.org/) for its commit history.
 
+## [Unreleased]
+
+### Added
+
+- **Reliability guards** — the code graph now audits the built-in agent's output, not just its
+  input. All off by default; all opt-in via `graphcode.json`; none can throw into the agent loop.
+  - **Live graph sync** (`liveGraphSync`): re-index a single file in place after the agent writes or
+    edits it, so subsequent graph queries and guards reflect the agent's own change. Backed by a new
+    single-file reindex path (`src/agent/graph-sync.ts`) reusing the incremental indexer internals in
+    one transaction, plus a scoped pending-ref re-resolver (`reresolvePendingRefsForNames`) that keeps
+    the pending-table scan `O(edited file)` at monorepo scale.
+  - **Pre-edit impact guardrail** (`editGuard`): append each edited file's blast radius (impacted
+    files + tier + history co-changes) to the edit's own tool result, with a symbol-count cost cap.
+  - **Post-edit verification** (`postEditVerify`, requires `liveGraphSync`): surface stale callers of
+    a removed/renamed symbol, references that now dangle, and unresolved imports the edit introduced.
+  - **Completion gate** (`completionGateEnabled`): an end-of-turn sweep that can hold the turn open
+    for graph-visible loose ends, bounded by `completionGateMaxIterations` / `completionGateMinSeverity`.
+- Richer Java type graph: method-parameter and field types now emit `references` edges, and same-name
+  type/constructor collisions disambiguate by qualified name.
+
+### Changed
+
+- The agent's tool dispatch is now asynchronous; within a turn, read-only tools run concurrently
+  while file-mutating tools (`write_file`/`edit_file`) run sequentially so each edit's live re-index
+  observes a consistent graph. No change to tool results or ordering as seen by the model.
+
 ## [0.1.0] - 2026-07-06
 
 Initial release.

@@ -121,6 +121,35 @@ request — so the agent starts with the graph's answer to "what's relevant here
 instead of discovering it one grep at a time. Full design and a sample pack in
 [docs/agent.md](docs/agent.md).
 
+## Reliability guards
+
+Turn-0 injection uses the graph to shape the agent's **input**. The reliability guards use it to
+check the agent's **output** — so the graph is a guardrail on every edit, not just context at the
+start. All four are **off by default** (the harness behaves exactly as before until you opt in via
+`graphcode.json`) and none can ever throw into the agent loop: they only append advisory text.
+
+- **Live graph sync.** After the agent writes or edits a file, GraphCode re-indexes *that one file*
+  in place — parse → re-resolve edges → scoped pending-ref pass, all in a single transaction — so
+  every subsequent `graph_*` query and every guard below reflects the agent's own change, not the
+  stale index from session start. This is the foundation the other three build on.
+- **Pre-edit impact guardrail.** The blast radius of the symbols being changed rides *on the edit's
+  own result* (`[impact guard] 3 file(s) depend on symbols in this file …`), so the agent can't
+  finish a change to a widely-used symbol without seeing who depends on it. A hard symbol-count cap
+  keeps it cheap; leaf helpers with a trivial blast radius stay silent.
+- **Post-edit verification.** After the re-index, GraphCode surfaces graph-level breakage the edit
+  introduced: callers left stale by a removed or renamed symbol, references elsewhere that now
+  resolve to nothing, imports that don't resolve to a repo file (`[verify] (high) src/main.ts
+  previously referenced a symbol removed in src/helper.ts …`).
+- **Completion gate.** When the agent tries to end the turn, an end-of-turn sweep over everything it
+  wrote can hold the turn open with a follow-up if the graph still shows loose ends — a stale caller
+  it never updated, a historically co-changing file it never opened. Bounded by a hard iteration cap
+  and framed as "possible loose ends (may already be handled)", so a false positive costs one cheap
+  acknowledgement, never a wrong edit.
+
+Together they close the loop that turn-0 injection opens: the graph informs the first token *and*
+audits the last one. Enable them per repo in [Configuration](#configuration); design notes in
+[docs/agent.md](docs/agent.md).
+
 ## Why a graph
 
 Agent context windows can't hold a 1M+ LOC codebase, and they shouldn't have to. The structure of
@@ -188,9 +217,21 @@ Optional `graphcode.json` in your repo root — every field has a default, nothi
   "contextPackTokens": 6000,
   "maxCommits": 2000,
   "ignore": ["**/generated/**"],
-  "workspaceRepos": ["../shared-lib"]
+  "workspaceRepos": ["../shared-lib"],
+  "liveGraphSync": true,
+  "postEditVerify": true,
+  "completionGateEnabled": false
 }
 ```
+
+The [reliability guards](#reliability-guards) are opt-in. Turn them on per repo:
+
+| Field | Default | Effect |
+|---|---|---|
+| `liveGraphSync` | `false` | Re-index each file the agent edits, in place, so the graph reflects its own changes mid-session. Foundation for the two below. |
+| `editGuard` | `{ enabled: true, minImpactedFiles: 2, maxSymbolsPerFile: 40, … }` | Pre-edit blast-radius advisory. Only computes when an edit happens; `minImpactedFiles` suppresses spam on leaf helpers, `maxSymbolsPerFile` caps cost. |
+| `postEditVerify` | `false` | Post-edit graph verification (stale callers, dangling refs, unresolved imports). Requires `liveGraphSync`. |
+| `completionGateEnabled` | `false` | End-of-turn loose-ends sweep. `completionGateMaxIterations` (default 2) and `completionGateMinSeverity` (default `"high"`) bound how much it can nag. |
 
 | Env var | Effect |
 |---|---|

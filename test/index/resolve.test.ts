@@ -221,6 +221,51 @@ describe('resolveRefTarget', () => {
     )
     expect(result).toBe(classNode)
   })
+
+  it('prefers a top-level type over a same-named nested type when both are imported (Java nested-type collision)', () => {
+    // Two different imported files can each define a symbol named "Foo": one
+    // is the real top-level class the caller means; the other is an
+    // unrelated nested type (Outer.Foo) that happens to share the bare name.
+    // A bare `Foo` reference conventionally means the top-level type.
+    const repo = store.upsertRepo('demo', '/tmp/demo')
+    const topLevel = store.insertNode(repo.id, {
+      kind: 'symbol',
+      subkind: 'class',
+      name: 'ByteArrayManager',
+      qualifiedName: 'ByteArrayManager',
+      filePath: 'org/apache/hdfs/util/ByteArrayManager.java',
+    })
+    const nested = store.insertNode(repo.id, {
+      kind: 'symbol',
+      subkind: 'interface',
+      name: 'ByteArrayManager',
+      qualifiedName: 'Write.ByteArrayManager',
+      filePath: 'org/apache/hdfs/client/HdfsClientConfigKeys.java',
+    })
+    const indexedSymbols: IndexedSymbolRef[] = [
+      {
+        nodeId: topLevel,
+        name: 'ByteArrayManager',
+        filePath: 'org/apache/hdfs/util/ByteArrayManager.java',
+        kind: 'class',
+        qualifiedName: 'ByteArrayManager',
+      },
+      {
+        nodeId: nested,
+        name: 'ByteArrayManager',
+        filePath: 'org/apache/hdfs/client/HdfsClientConfigKeys.java',
+        kind: 'interface',
+        qualifiedName: 'Write.ByteArrayManager',
+      },
+    ]
+    const result = resolveRefTarget(
+      'ByteArrayManager',
+      'org/apache/hdfs/DataStreamer.java',
+      new Set(['org/apache/hdfs/util/ByteArrayManager.java', 'org/apache/hdfs/client/HdfsClientConfigKeys.java']),
+      { store, repoId: repo.id, indexedSymbols, language: 'java' },
+    )
+    expect(result).toBe(topLevel)
+  })
 })
 
 describe('resolveJavaImportFiles', () => {
@@ -246,6 +291,19 @@ describe('resolveJavaImportFiles', () => {
     const result = resolveJavaImportFiles('org.apache.hdfs.util.*', packagesByName, known)
     expect(result.length).toBeLessThanOrEqual(20)
     expect(result.every((f) => f.startsWith('src/main/java/org/apache/hdfs/util/'))).toBe(true)
+  })
+
+  it('resolves a single-class import even when its package has more files than the wildcard cap', () => {
+    // The wildcard cap (GO_MOD_CAP=20) must only bound a `.* ` fan-out, never
+    // a specific single-class import — a package with >20 files (common in
+    // Hadoop's `util` packages) must not silently drop the target class just
+    // because it doesn't sort into the first 20 directory entries.
+    const files = Array.from({ length: 45 }, (_, i) => `src/main/java/org/apache/hdfs/util/AAA${i}.java`)
+    files.push('src/main/java/org/apache/hdfs/util/ByteArrayManager.java')
+    const known = new Set(files)
+    const packagesByName = buildJavaPackageIndex(new Map(files.map((f) => [f, 'org.apache.hdfs.util'])))
+    const result = resolveJavaImportFiles('org.apache.hdfs.util.ByteArrayManager', packagesByName, known)
+    expect(result).toEqual(['src/main/java/org/apache/hdfs/util/ByteArrayManager.java'])
   })
 
   it('returns an empty list for a package with no known files (external/stdlib import)', () => {

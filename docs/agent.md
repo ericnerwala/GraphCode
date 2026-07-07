@@ -95,6 +95,32 @@ name-matched symbols — the same algorithm used by `graphcode impact` (see
 Graph tools are backed directly by `GraphStore` reads — no subprocess, no re-parsing — so they're
 fast enough to call repeatedly without the cost blowup a full re-index would cause.
 
+## Reliability guards on `write_file` / `edit_file`
+
+The turn-0 pack uses the graph to shape what the agent *sees*. The reliability guards use it to
+check what the agent *does*. All are off by default and enabled per repo in `graphcode.json` (see
+[docs/configuration.md](configuration.md#reliability-guards)); none can throw into the loop.
+
+When `liveGraphSync` is on, each `write_file`/`edit_file` result is post-processed in one pass:
+
+1. **Pre-edit impact advisory** (`editGuard`) — the blast radius of the edited file's symbols is
+   appended to the result, so the agent sees who depends on what it just changed:
+   `[impact guard] 3 file(s) depend on symbols in this file: - [direct] src/main.ts (via helper) …`
+2. **Live re-index** — the edited file is re-parsed and re-resolved in place, in a single
+   transaction, so every later `graph_*` call in the session reflects the edit rather than the
+   session-start snapshot. A one-line `[graph-sync]` note records what symbols changed.
+3. **Post-edit verification** (`postEditVerify`) — graph-level breakage is appended as findings:
+   `[verify] - (high) src/main.ts previously referenced a symbol removed in src/helper.ts …`
+
+Because file mutations must each re-index against a consistent graph, the loop runs `write_file`/
+`edit_file` calls **sequentially** within a turn while still running read-only tools concurrently;
+tool results are returned in their original order, so the model sees no difference in structure.
+
+When `completionGateEnabled` is on, an end-of-turn sweep over everything the agent wrote this turn
+can inject one follow-up message enumerating graph-visible loose ends (a stale caller never updated,
+a historically co-changing file never opened) and let the turn continue — bounded by
+`completionGateMaxIterations`, and framed as *possible* issues so a false positive is cheap.
+
 ## Streaming
 
 Responses stream token-by-token from the Anthropic API; tool calls are interleaved with the
