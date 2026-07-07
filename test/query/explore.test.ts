@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { rmSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import type { GraphStore } from '../../src/graph/store.js'
 import { explore } from '../../src/query/explore.js'
 import { insertSymbol, makeTempStore, writeFixtureFile } from './fixtures.js'

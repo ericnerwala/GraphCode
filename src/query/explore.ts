@@ -4,7 +4,7 @@
 // symbol on the path. Replaces a chain of file reads for "how does X reach Y".
 
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { resolveInRoot } from '../agent/tools/path-safety.js'
 import type { GraphStore } from '../graph/store.js'
 import type { EdgeKind, GraphNode } from '../graph/types.js'
 import { resolveSymbol } from './locate.js'
@@ -110,7 +110,7 @@ function inlineSource(root: string, node: GraphNode, maxLines: number): ExploreS
     return { node, source: undefined, truncated: false }
   }
   try {
-    const fullPath = join(root, node.filePath)
+    const fullPath = resolveInRoot(root, node.filePath)
     const content = readFileSync(fullPath, 'utf8')
     const lines = content.split('\n')
     const startIdx = Math.max(0, node.startLine - 1)

@@ -346,6 +346,50 @@ public class NameNode {
     }
   })
 
+  it('resolves a cross-package `new Foo()` call to the imported class, not left ambiguous by its own constructor', async () => {
+    // A Java class with an explicit constructor extracts two same-named
+    // symbols (the class and its constructor). An importing file's `new
+    // Foo()` call must resolve to the class despite that same-file collision.
+    write(
+      root,
+      'src/main/java/org/apache/hdfs/server/resourcemanager/security/DelegationTokenRenewer.java',
+      `package org.apache.hdfs.server.resourcemanager.security;
+
+public class DelegationTokenRenewer {
+  public DelegationTokenRenewer() {}
+}
+`,
+    )
+    write(
+      root,
+      'src/main/java/org/apache/hdfs/server/resourcemanager/ResourceManager.java',
+      `package org.apache.hdfs.server.resourcemanager;
+
+import org.apache.hdfs.server.resourcemanager.security.DelegationTokenRenewer;
+
+public class ResourceManager {
+  protected DelegationTokenRenewer createDelegationTokenRenewer() {
+    return new DelegationTokenRenewer();
+  }
+}
+`,
+    )
+    const config = loadConfig(root)
+    const result = await indexRepo(store, config)
+    expect(store.pendingRefsByName(result.repoId, 'DelegationTokenRenewer')).toHaveLength(0)
+
+    const createSymbol = store.findNodesByName('createDelegationTokenRenewer', { kinds: ['symbol'] })[0]
+    expect(createSymbol).toBeDefined()
+    if (createSymbol) {
+      const calls = store.neighbors(createSymbol.id, { direction: 'out', kinds: ['calls'] })
+      const target = calls.find((n) => n.node.name === 'DelegationTokenRenewer')
+      expect(target?.node.subkind).toBe('class')
+      expect(target?.node.filePath).toBe(
+        'src/main/java/org/apache/hdfs/server/resourcemanager/security/DelegationTokenRenewer.java',
+      )
+    }
+  })
+
   it('resolves a wildcard import to every file in the target package', async () => {
     write(
       root,

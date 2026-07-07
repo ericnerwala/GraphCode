@@ -189,6 +189,38 @@ describe('resolveRefTarget', () => {
     })
     expect(result).toBe(imported)
   })
+
+  it('resolves an imported class over its own same-named constructor method (Java constructor collision)', () => {
+    // Java extracts a constructor with the class's own name, so a class file
+    // with an explicit constructor has two same-named symbols. A bare
+    // `new Foo()` call from another file must resolve to the class, not be
+    // left ambiguous by the class/constructor pair both living in the
+    // imported file.
+    const repo = store.upsertRepo('demo', '/tmp/demo')
+    const classNode = store.insertNode(repo.id, {
+      kind: 'symbol',
+      subkind: 'class',
+      name: 'DelegationTokenRenewer',
+      filePath: 'org/apache/hdfs/security/DelegationTokenRenewer.java',
+    })
+    const ctorNode = store.insertNode(repo.id, {
+      kind: 'symbol',
+      subkind: 'method',
+      name: 'DelegationTokenRenewer',
+      filePath: 'org/apache/hdfs/security/DelegationTokenRenewer.java',
+    })
+    const indexedSymbols: IndexedSymbolRef[] = [
+      { nodeId: classNode, name: 'DelegationTokenRenewer', filePath: 'org/apache/hdfs/security/DelegationTokenRenewer.java', kind: 'class' },
+      { nodeId: ctorNode, name: 'DelegationTokenRenewer', filePath: 'org/apache/hdfs/security/DelegationTokenRenewer.java', kind: 'method' },
+    ]
+    const result = resolveRefTarget(
+      'DelegationTokenRenewer',
+      'org/apache/hdfs/ResourceManager.java',
+      new Set(['org/apache/hdfs/security/DelegationTokenRenewer.java']),
+      { store, repoId: repo.id, indexedSymbols, language: 'java' },
+    )
+    expect(result).toBe(classNode)
+  })
 })
 
 describe('resolveJavaImportFiles', () => {
