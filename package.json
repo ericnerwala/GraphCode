@@ -1,0 +1,57 @@
+{
+  "name": "graphcode",
+  "version": "0.1.0",
+  "description": "The graph-native coding agent. Indexes your codebase as a rich knowledge graph — code structure, git history, specs, features — and puts it in front of the agent before the first token.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Eric Nerwala",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ericnerwala/GraphCode.git"
+  },
+  "bin": {
+    "graphcode": "./bin/graphcode.mjs"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-assets.mjs",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepare": "node scripts/prepare.mjs"
+  },
+  "keywords": [
+    "coding-agent",
+    "code-graph",
+    "knowledge-graph",
+    "tree-sitter",
+    "code-intelligence",
+    "mcp",
+    "ai",
+    "static-analysis"
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^15.0.0",
+    "ignore": "^7.0.5",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

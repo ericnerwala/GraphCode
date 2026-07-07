@@ -1,0 +1,10 @@
+node_modules/
+.graphcode/
+*.log
+.DS_Store
+coverage/
+*.tsbuildinfo
+.env
+
+# dist/ is committed so `npm install -g github:ericnerwala/GraphCode` works
+# without a build toolchain. Rebuilt by `npm run build` / the prepare script.

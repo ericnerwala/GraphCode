@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="96" viewBox="0 0 480 96" role="img" aria-label="GraphCode">
+  <title>GraphCode</title>
+  <g stroke="#58a6ff" stroke-width="2.5" fill="none">
+    <line x1="26" y1="30" x2="48" y2="18" />
+    <line x1="26" y1="30" x2="26" y2="66" />
+    <line x1="26" y1="66" x2="48" y2="78" />
+    <line x1="48" y1="18" x2="48" y2="78" />
+  </g>
+  <g fill="#58a6ff">
+    <circle cx="26" cy="30" r="7" />
+    <circle cx="48" cy="18" r="7" />
+    <circle cx="26" cy="66" r="7" />
+    <circle cx="48" cy="78" r="7" />
+  </g>
+  <text x="76" y="63" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="42" font-weight="600" fill="#f0f6fc">Graph<tspan fill="#58a6ff">Code</tspan></text>
+</svg>

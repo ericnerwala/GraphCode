@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GraphCode — Graph Viewer</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #10151c;
+    --panel-border: #1f2733;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-faint: #5b6470;
+    --accent: #58a6ff;
+    --mono: 'SFMono-Regular', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+
+    --kind-file: #4ea1ff;
+    --kind-symbol: #7ee787;
+    --kind-commit: #f2cc60;
+    --kind-doc: #d2a8ff;
+    --kind-feature: #ff7b72;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+
+  #app {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  canvas#graph {
+    position: absolute;
+    inset: 0;
+    display: block;
+    cursor: grab;
+  }
+  canvas#graph.dragging { cursor: grabbing; }
+
+  /* ---- top bar ---- */
+  #topbar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, rgba(13,17,23,0.92) 0%, rgba(13,17,23,0.75) 70%, transparent 100%);
+    pointer-events: none;
+  }
+  #topbar > * { pointer-events: auto; }
+
+  #brand {
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #brand .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+  #brand .sub {
+    color: var(--text-faint);
+    font-weight: 400;
+    font-size: 12px;
+  }
+
+  #search-wrap {
+    position: relative;
+    flex: 0 1 340px;
+  }
+  #search {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: var(--sans);
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+  #search:focus { border-color: var(--accent); }
+  #search::placeholder { color: var(--text-faint); }
+
+  #search-results {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0; right: 0;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  #search-results.open { display: block; }
+  .result-row {
+    padding: 7px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .result-row:last-child { border-bottom: none; }
+  .result-row:hover { background: #161c26; }
+  .result-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .result-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .result-kind { color: var(--text-faint); font-size: 11px; }
+
+  #stats {
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+
+  /* ---- legend / toggles ---- */
+  #legend {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+    z-index: 10;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 170px;
+  }
+  #legend .legend-title {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin-bottom: 2px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 0;
+    opacity: 1;
+    transition: opacity 0.1s ease;
+  }
+  .legend-item.off { opacity: 0.35; }
+  .legend-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .legend-item .count { margin-left: auto; color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+
+  /* ---- side panel ---- */
+  #panel {
+    position: absolute;
+    top: 0; right: 0;
+    bottom: 0;
+    width: 340px;
+    background: var(--panel);
+    border-left: 1px solid var(--panel-border);
+    z-index: 20;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -8px 0 24px rgba(0,0,0,0.35);
+  }
+  #panel.open { transform: translateX(0); }
+
+  #panel-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  #panel-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #panel-close:hover { color: var(--text); background: #1c2430; }
+
+  #panel-kind-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  #panel-kind-badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  #panel-name {
+    font-size: 15px;
+    font-weight: 600;
+    word-break: break-word;
+    font-family: var(--mono);
+  }
+
+  #panel-body {
+    padding: 14px 16px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .field {
+    margin-bottom: 12px;
+  }
+  .field-label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+    margin-bottom: 3px;
+  }
+  .field-value {
+    font-size: 12.5px;
+    color: var(--text);
+    font-family: var(--mono);
+    word-break: break-word;
+  }
+
+  #panel-neighbors {
+    margin-top: 4px;
+  }
+  .neighbor-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .neighbor-row:hover { background: #161c26; }
+  .neighbor-swatch { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .neighbor-edge { color: var(--text-faint); font-size: 10.5px; font-family: var(--mono); flex-shrink: 0; }
+  .neighbor-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .neighbor-dir { color: var(--text-faint); font-size: 10px; flex-shrink: 0; }
+
+  #empty-state {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--text-faint);
+    font-size: 13px;
+    text-align: center;
+    z-index: 5;
+  }
+  #empty-state.show { display: flex; }
+  #empty-state .big { font-size: 15px; color: var(--text-dim); }
+
+  #hint {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: var(--mono);
+    text-align: right;
+    line-height: 1.6;
+    pointer-events: none;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #263041; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #334054; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="graph"></canvas>
+
+  <div id="empty-state">
+    <div class="big">No graph loaded</div>
+    <div>Run <code>graphcode viz</code> from an indexed repo to view its knowledge graph.</div>
+  </div>
+
+  <div id="topbar">
+    <div id="brand"><span class="dot"></span>GraphCode <span class="sub">graph viewer</span></div>
+    <div id="search-wrap">
+      <input id="search" type="text" placeholder="Search nodes by name…" autocomplete="off" />
+      <div id="search-results"></div>
+    </div>
+    <div id="stats"></div>
+  </div>
+
+  <div id="legend">
+    <div class="legend-title">Node kinds</div>
+    <div class="legend-item" data-kind="file"><span class="legend-swatch" style="background:var(--kind-file)"></span>file<span class="count"></span></div>
+    <div class="legend-item" data-kind="symbol"><span class="legend-swatch" style="background:var(--kind-symbol)"></span>symbol<span class="count"></span></div>
+    <div class="legend-item" data-kind="commit"><span class="legend-swatch" style="background:var(--kind-commit)"></span>commit<span class="count"></span></div>
+    <div class="legend-item" data-kind="doc"><span class="legend-swatch" style="background:var(--kind-doc)"></span>doc<span class="count"></span></div>
+    <div class="legend-item" data-kind="feature"><span class="legend-swatch" style="background:var(--kind-feature)"></span>feature<span class="count"></span></div>
+  </div>
+
+  <div id="hint">drag to pan · scroll to zoom · click a node for details</div>
+
+  <div id="panel">
+    <div id="panel-header">
+      <div>
+        <div id="panel-kind-badge"><span class="dot"></span><span id="panel-kind-text"></span></div>
+        <div id="panel-name"></div>
+      </div>
+      <button id="panel-close" aria-label="Close">✕</button>
+    </div>
+    <div id="panel-body">
+      <div id="panel-fields"></div>
+      <div class="field">
+        <div class="field-label">Neighbors</div>
+        <div id="panel-neighbors"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var KIND_COLOR = {
+    file: '#4ea1ff',
+    symbol: '#7ee787',
+    commit: '#f2cc60',
+    doc: '#d2a8ff',
+    feature: '#ff7b72'
+  };
+  var DEFAULT_COLOR = '#8b949e';
+  var MAX_NODES = 600;
+
+  var canvas = document.getElementById('graph');
+  var ctx = canvas.getContext('2d');
+  var appEl = document.getElementById('app');
+  var emptyState = document.getElementById('empty-state');
+
+  var state = {
+    nodes: [],       // {id, type, subtype, name, filePath, startLine, endLine, x, y, vx, vy, degree}
+    edges: [],       // {source, target, type, weight}
+    nodeById: new Map(),
+    adjacency: new Map(), // id -> [{node, edge, dir}]
+    visibleKinds: new Set(Object.keys(KIND_COLOR)),
+    selected: null,
+    highlighted: null,
+    camera: { x: 0, y: 0, scale: 1 },
+    drag: null,
+    hoverNode: null
+  };
+
+  function fitCanvas() {
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  function colorFor(kind) {
+    return KIND_COLOR[kind] || DEFAULT_COLOR;
+  }
+
+  function nodeRadius(node) {
+    var base = node.type === 'file' ? 6 : node.type === 'symbol' ? 3.5 : 5;
+    var boost = Math.min(Math.log2((node.degree || 0) + 1) * 1.4, 8);
+    return base + boost;
+  }
+
+  // ---- data loading ----------------------------------------------------
+
+  function degreeSample(nodes, edges, cap) {
+    if (nodes.length <= cap) return { nodes: nodes, edges: edges };
+    var degree = new Map();
+    for (var i = 0; i < edges.length; i++) {
+      var e = edges[i];
+      degree.set(e.source, (degree.get(e.source) || 0) + 1);
+      degree.set(e.target, (degree.get(e.target) || 0) + 1);
+    }
+    var sorted = nodes.slice().sort(function (a, b) {
+      return (degree.get(b.id) || 0) - (degree.get(a.id) || 0);
+    });
+    var kept = sorted.slice(0, cap);
+    var keptIds = new Set(kept.map(function (n) { return n.id; }));
+    var keptEdges = edges.filter(function (e) {
+      return keptIds.has(e.source) && keptIds.has(e.target);
+    });
+    return { nodes: kept, edges: keptEdges };
+  }
+
+  function loadGraph(raw) {
+    var nodes = (raw.nodes || []).map(function (n) {
+      return {
+        id: n.id,
+        type: n.type,
+        subtype: n.subtype,
+        name: n.name,
+        filePath: n.filePath,
+        startLine: n.startLine,
+        endLine: n.endLine,
+        x: (Math.random() - 0.5) * 800,
+        y: (Math.random() - 0.5) * 800,
+        vx: 0,
+        vy: 0,
+        degree: 0
+      };
+    });
+    var edges = (raw.edges || []).map(function (e) {
+      return { source: e.source, target: e.target, type: e.type, weight: e.weight || 1 };
+    });
+
+    var sampled = degreeSample(nodes, edges, MAX_NODES);
+    state.nodes = sampled.nodes;
+    state.edges = sampled.edges;
+
+    state.nodeById = new Map(state.nodes.map(function (n) { return [n.id, n]; }));
+    state.adjacency = new Map();
+    state.nodes.forEach(function (n) { state.adjacency.set(n.id, []); });
+
+    state.edges.forEach(function (e) {
+      var src = state.nodeById.get(e.source);
+      var dst = state.nodeById.get(e.target);
+      if (!src || !dst) return;
+      src.degree++;
+      dst.degree++;
+      state.adjacency.get(e.source).push({ node: dst, edge: e, dir: 'out' });
+      state.adjacency.get(e.target).push({ node: src, edge: e, dir: 'in' });
+    });
+
+    updateStats(raw.metadata);
+    updateLegendCounts();
+    emptyState.classList.toggle('show', state.nodes.length === 0);
+  }
+
+  function updateStats(metadata) {
+    var el = document.getElementById('stats');
+    var total = state.nodes.length;
+    var totalEdges = state.edges.length;
+    var suffix = metadata && metadata.stats && metadata.stats.files !== undefined
+      ? (total < (metadata.stats.files + metadata.stats.symbols) ? ' (sampled)' : '')
+      : '';
+    el.textContent = total + ' nodes · ' + totalEdges + ' edges' + suffix;
+  }
+
+  function updateLegendCounts() {
+    var counts = {};
+    state.nodes.forEach(function (n) {
+      counts[n.type] = (counts[n.type] || 0) + 1;
+    });
+    document.querySelectorAll('.legend-item').forEach(function (el) {
+      var kind = el.getAttribute('data-kind');
+      var countEl = el.querySelector('.count');
+      countEl.textContent = counts[kind] ? counts[kind] : '';
+    });
+  }
+
+  // ---- force layout ------------------------------------------------------
+
+  var REPULSION = 2200;
+  var SPRING = 0.02;
+  var SPRING_LEN = 70;
+  var DAMPING = 0.82;
+  var CENTER_PULL = 0.0015;
+
+  function tick() {
+    var nodes = state.nodes;
+    var n = nodes.length;
+    if (n === 0) return;
+
+    // Repulsion (coarse O(n^2), capped node count keeps this cheap enough).
+    for (var i = 0; i < n; i++) {
+      var a = nodes[i];
+      for (var j = i + 1; j < n; j++) {
+        var b = nodes[j];
+        var dx = a.x - b.x;
+        var dy = a.y - b.y;
+        var distSq = dx * dx + dy * dy || 0.01;
+        var force = REPULSION / distSq;
+        var dist = Math.sqrt(distSq);
+        var fx = (dx / dist) * force;
+        var fy = (dy / dist) * force;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
+      }
+      a.vx += (0 - a.x) * CENTER_PULL;
+      a.vy += (0 - a.y) * CENTER_PULL;
+    }
+
+    // Springs along edges.
+    state.edges.forEach(function (e) {
+      var src = state.nodeById.get(e.source);
+      var dst = state.nodeById.get(e.target);
+      if (!src || !dst) return;
+      var dx = dst.x - src.x;
+      var dy = dst.y - src.y;
+      var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      var diff = dist - SPRING_LEN;
+      var fx = (dx / dist) * diff * SPRING;
+      var fy = (dy / dist) * diff * SPRING;
+      src.vx += fx; src.vy += fy;
+      dst.vx -= fx; dst.vy -= fy;
+    });
+
+    for (var k = 0; k < n; k++) {
+      var node = nodes[k];
+      if (node === state.drag) continue;
+      node.vx *= DAMPING;
+      node.vy *= DAMPING;
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+  }
+
+  // ---- rendering ---------------------------------------------------------
+
+  function worldToScreen(x, y) {
+    return {
+      x: window.innerWidth / 2 + (x + state.camera.x) * state.camera.scale,
+      y: window.innerHeight / 2 + (y + state.camera.y) * state.camera.scale
+    };
+  }
+  function screenToWorld(x, y) {
+    return {
+      x: (x - window.innerWidth / 2) / state.camera.scale - state.camera.x,
+      y: (y - window.innerHeight / 2) / state.camera.scale - state.camera.y
+    };
+  }
+
+  function connectedIds(node) {
+    var ids = new Set([node.id]);
+    (state.adjacency.get(node.id) || []).forEach(function (link) { ids.add(link.node.id); });
+    return ids;
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+    var focusIds = state.selected ? connectedIds(state.selected) : (state.highlighted ? connectedIds(state.highlighted) : null);
+
+    // edges
+    ctx.lineWidth = 1;
+    state.edges.forEach(function (e) {
+      var src = state.nodeById.get(e.source);
+      var dst = state.nodeById.get(e.target);
+      if (!src || !dst) return;
+      if (!state.visibleKinds.has(src.type) || !state.visibleKinds.has(dst.type)) return;
+
+      var dim = focusIds && !(focusIds.has(src.id) && focusIds.has(dst.id));
+      var p1 = worldToScreen(src.x, src.y);
+      var p2 = worldToScreen(dst.x, dst.y);
+      ctx.strokeStyle = dim ? 'rgba(90,100,115,0.08)' : 'rgba(120,140,160,0.35)';
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    });
+
+    // nodes
+    state.nodes.forEach(function (node) {
+      if (!state.visibleKinds.has(node.type)) return;
+      var dim = focusIds && !focusIds.has(node.id);
+      var p = worldToScreen(node.x, node.y);
+      var r = nodeRadius(node) * Math.max(state.camera.scale, 0.4);
+
+      ctx.globalAlpha = dim ? 0.18 : 1;
+      ctx.fillStyle = colorFor(node.type);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (node === state.selected || node === state.highlighted) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+      }
+
+      if (state.camera.scale > 0.55 && !dim) {
+        ctx.globalAlpha = Math.min(1, (state.camera.scale - 0.55) * 2.2);
+        ctx.fillStyle = '#c9d1d9';
+        ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(node.name, p.x + r + 4, p.y);
+      }
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  function loop() {
+    tick();
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- interaction --------------------------------------------------------
+
+  function nodeAtScreen(x, y) {
+    var world = screenToWorld(x, y);
+    var best = null;
+    var bestDist = Infinity;
+    for (var i = 0; i < state.nodes.length; i++) {
+      var node = state.nodes[i];
+      if (!state.visibleKinds.has(node.type)) continue;
+      var dx = node.x - world.x;
+      var dy = node.y - world.y;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      var r = nodeRadius(node) + 4;
+      if (dist <= r && dist < bestDist) {
+        best = node;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
+  var pointer = { down: false, moved: false, lastX: 0, lastY: 0, draggedNode: null };
+
+  canvas.addEventListener('mousedown', function (e) {
+    pointer.down = true;
+    pointer.moved = false;
+    pointer.lastX = e.clientX;
+    pointer.lastY = e.clientY;
+    var hit = nodeAtScreen(e.clientX, e.clientY);
+    if (hit) {
+      pointer.draggedNode = hit;
+      state.drag = hit;
+      canvas.classList.add('dragging');
+    }
+  });
+
+  window.addEventListener('mousemove', function (e) {
+    if (!pointer.down) {
+      var hover = nodeAtScreen(e.clientX, e.clientY);
+      state.hoverNode = hover;
+      canvas.style.cursor = hover ? 'pointer' : 'grab';
+      return;
+    }
+    var dx = e.clientX - pointer.lastX;
+    var dy = e.clientY - pointer.lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) pointer.moved = true;
+
+    if (pointer.draggedNode) {
+      var world = screenToWorld(e.clientX, e.clientY);
+      pointer.draggedNode.x = world.x;
+      pointer.draggedNode.y = world.y;
+      pointer.draggedNode.vx = 0;
+      pointer.draggedNode.vy = 0;
+    } else {
+      state.camera.x += dx / state.camera.scale;
+      state.camera.y += dy / state.camera.scale;
+      canvas.classList.add('dragging');
+    }
+    pointer.lastX = e.clientX;
+    pointer.lastY = e.clientY;
+  });
+
+  window.addEventListener('mouseup', function (e) {
+    if (pointer.down && !pointer.moved) {
+      var hit = nodeAtScreen(e.clientX, e.clientY);
+      if (hit) {
+        selectNode(hit);
+      } else {
+        closePanel();
+      }
+    }
+    pointer.down = false;
+    pointer.draggedNode = null;
+    state.drag = null;
+    canvas.classList.remove('dragging');
+  });
+
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var factor = Math.exp(-e.deltaY * 0.001);
+    var before = screenToWorld(e.clientX, e.clientY);
+    state.camera.scale = Math.min(Math.max(state.camera.scale * factor, 0.1), 6);
+    var after = screenToWorld(e.clientX, e.clientY);
+    state.camera.x += (after.x - before.x);
+    state.camera.y += (after.y - before.y);
+  }, { passive: false });
+
+  // ---- selection / panel --------------------------------------------------
+
+  var panel = document.getElementById('panel');
+
+  function selectNode(node) {
+    state.selected = node;
+    state.highlighted = null;
+    renderPanel(node);
+    panel.classList.add('open');
+  }
+
+  function closePanel() {
+    state.selected = null;
+    panel.classList.remove('open');
+  }
+
+  document.getElementById('panel-close').addEventListener('click', closePanel);
+
+  function renderPanel(node) {
+    var color = colorFor(node.type);
+    document.getElementById('panel-kind-badge').querySelector('.dot').style.background = color;
+    document.getElementById('panel-kind-text').textContent = node.type + (node.subtype ? ' · ' + node.subtype : '');
+    document.getElementById('panel-name').textContent = node.name;
+
+    var fields = document.getElementById('panel-fields');
+    fields.innerHTML = '';
+    function addField(label, value) {
+      if (value === undefined || value === null || value === '') return;
+      var wrap = document.createElement('div');
+      wrap.className = 'field';
+      var l = document.createElement('div');
+      l.className = 'field-label';
+      l.textContent = label;
+      var v = document.createElement('div');
+      v.className = 'field-value';
+      v.textContent = value;
+      wrap.appendChild(l);
+      wrap.appendChild(v);
+      fields.appendChild(wrap);
+    }
+    addField('File', node.filePath);
+    if (node.startLine !== undefined) {
+      addField('Lines', node.startLine + (node.endLine && node.endLine !== node.startLine ? '–' + node.endLine : ''));
+    }
+    addField('Degree', String(node.degree));
+
+    var neighborsEl = document.getElementById('panel-neighbors');
+    neighborsEl.innerHTML = '';
+    var links = (state.adjacency.get(node.id) || []).slice(0, 80);
+    if (links.length === 0) {
+      var none = document.createElement('div');
+      none.className = 'field-value';
+      none.style.color = 'var(--text-faint)';
+      none.textContent = 'no connections';
+      neighborsEl.appendChild(none);
+    }
+    links.forEach(function (link) {
+      var row = document.createElement('div');
+      row.className = 'neighbor-row';
+      var swatch = document.createElement('span');
+      swatch.className = 'neighbor-swatch';
+      swatch.style.background = colorFor(link.node.type);
+      var dir = document.createElement('span');
+      dir.className = 'neighbor-dir';
+      dir.textContent = link.dir === 'out' ? '→' : '←';
+      var edgeLabel = document.createElement('span');
+      edgeLabel.className = 'neighbor-edge';
+      edgeLabel.textContent = link.edge.type;
+      var name = document.createElement('span');
+      name.className = 'neighbor-name';
+      name.textContent = link.node.name;
+      row.appendChild(dir);
+      row.appendChild(swatch);
+      row.appendChild(edgeLabel);
+      row.appendChild(name);
+      row.addEventListener('click', function () {
+        selectNode(link.node);
+        centerOn(link.node);
+      });
+      neighborsEl.appendChild(row);
+    });
+  }
+
+  function centerOn(node) {
+    state.camera.x = -node.x;
+    state.camera.y = -node.y;
+  }
+
+  // ---- legend toggles -----------------------------------------------------
+
+  document.querySelectorAll('.legend-item').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var kind = el.getAttribute('data-kind');
+      if (state.visibleKinds.has(kind)) {
+        state.visibleKinds.delete(kind);
+        el.classList.add('off');
+      } else {
+        state.visibleKinds.add(kind);
+        el.classList.remove('off');
+      }
+    });
+  });
+
+  // ---- search ---------------------------------------------------------
+
+  var searchInput = document.getElementById('search');
+  var searchResults = document.getElementById('search-results');
+
+  function runSearch(query) {
+    var q = query.trim().toLowerCase();
+    searchResults.innerHTML = '';
+    if (q.length === 0) {
+      searchResults.classList.remove('open');
+      state.highlighted = null;
+      return;
+    }
+    var matches = state.nodes.filter(function (n) {
+      return n.name.toLowerCase().indexOf(q) !== -1;
+    }).slice(0, 30);
+
+    if (matches.length === 0) {
+      searchResults.classList.remove('open');
+      state.highlighted = null;
+      return;
+    }
+
+    matches.forEach(function (n) {
+      var row = document.createElement('div');
+      row.className = 'result-row';
+      var swatch = document.createElement('span');
+      swatch.className = 'result-swatch';
+      swatch.style.background = colorFor(n.type);
+      var name = document.createElement('span');
+      name.className = 'result-name';
+      name.textContent = n.name;
+      var kind = document.createElement('span');
+      kind.className = 'result-kind';
+      kind.textContent = n.type;
+      row.appendChild(swatch);
+      row.appendChild(name);
+      row.appendChild(kind);
+      row.addEventListener('click', function () {
+        selectNode(n);
+        centerOn(n);
+        searchResults.classList.remove('open');
+        searchInput.value = n.name;
+      });
+      searchResults.appendChild(row);
+    });
+    searchResults.classList.add('open');
+    state.highlighted = matches[0];
+  }
+
+  searchInput.addEventListener('input', function () { runSearch(searchInput.value); });
+  searchInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      searchResults.classList.remove('open');
+      state.highlighted = null;
+      searchInput.blur();
+    }
+  });
+  document.addEventListener('click', function (e) {
+    if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+      searchResults.classList.remove('open');
+    }
+  });
+
+  // ---- boot -------------------------------------------------------------
+
+  function boot() {
+    var embedded = window.__GRAPHCODE_DATA__;
+    if (embedded) {
+      loadGraph(embedded);
+      loop();
+      return;
+    }
+    fetch('/graph.json')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        loadGraph(data);
+        loop();
+      })
+      .catch(function () {
+        emptyState.classList.add('show');
+        loop();
+      });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
